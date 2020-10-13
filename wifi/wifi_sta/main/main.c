@@ -16,6 +16,20 @@
 #include "esp_http_server.h"
 #include "config.h"
 
+#include "lwip/err.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include <lwip/netdb.h>
+#include "lwip/udp.h"
+
+
+#include "lwip/init.h"
+#include "lwip/timeouts.h"
+
+#include "netif/etharp.h"
+
+#include <signal.h>
+
 static const char* TAG = "camera";
 #define CAM_USE_WIFI
 
@@ -24,8 +38,8 @@ static const char* TAG = "camera";
 #define ESP_WIFI_PASS ""
 #else
 
-#define ESP_WIFI_SSID "M5-2.4G"
-#define ESP_WIFI_PASS "Office@888888"
+#define ESP_WIFI_SSID "sanby"
+#define ESP_WIFI_PASS "1234567890"
 
 #endif
 
@@ -73,8 +87,47 @@ static camera_config_t camera_config = {
 static void wifi_init_softap();
 static esp_err_t http_server_init();
 
+
+const ip_addr_t *client_addr;
+u16_t *client_port;
+struct udp_pcb *client_upcb;
+static void udp_test_recv(void *arg,struct udp_pcb *upcb,struct pbuf *p,const ip_addr_t *addr,u16_t port)
+{
+    client_addr=addr;
+    client_port=port;
+    client_upcb=upcb;
+    printf("Received UDP Packet from ip_addr %s,%d\r\n",  inet_ntoa(*(struct in_addr*)&(addr)),port);
+    LWIP_UNUSED_ARG(arg);
+    if (p != NULL) {
+            pbuf_free(p);/*
+            p=pbuf_alloc(PBUF_TRANSPORT, 1000, PBUF_RAM);
+            printf("UDP Packet Received! Payload:%d\r\n",p->len);
+            err_t code = udp_sendto(upcb, p, addr, port); //send it back to port 5555
+            printf("Echo'd packet, result code is %d\r\n",code);
+            pbuf_free(p);*/
+    }
+}
+void udp_test_send()
+{
+    struct pbuf *p;
+    p=pbuf_alloc(PBUF_TRANSPORT, 1000, PBUF_RAM);
+    printf("UDP Packet Received! Payload:%d\r\n",p->len);
+    err_t code = udp_sendto(client_upcb, p, client_addr, client_port); //send it back to port 5555
+    printf("Echo'd packet, result code is %d\r\n",code);
+    pbuf_free(p);
+}
+void udp_server_init(){
+    struct udp_pcb* pcb = udp_new();
+    udp_bind(pcb, IP_ADDR_ANY, 4444); 
+    udp_recv(pcb,udp_test_recv, NULL);
+}
+
+
+
+
 void app_main()
 {
+    printf("Camera capture start\n");
     esp_log_level_set("wifi", ESP_LOG_INFO);
     
     esp_err_t err = nvs_flash_init();
@@ -106,6 +159,8 @@ void app_main()
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
     http_server_init();
+    udp_server_init();
+    
 #endif
 }
 
@@ -137,7 +192,6 @@ esp_err_t jpg_httpd_handler(httpd_req_t *req){
     ESP_LOGI(TAG, "JPG: %uKB %ums", (uint32_t)(fb_len/1024), (uint32_t)((fr_end - fr_start)/1000));
     return res;
 }
-
 esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
     camera_fb_t * fb = NULL;
     esp_err_t res = ESP_OK;
@@ -172,6 +226,7 @@ esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
                 _jpg_buf = fb->buf;
             }
         }
+        int64_t send_start = esp_timer_get_time();
         if(res == ESP_OK){
             size_t hlen = snprintf((char *)part_buf, 64, _STREAM_PART, _jpg_buf_len);
 
@@ -179,10 +234,15 @@ esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
         }
         if(res == ESP_OK){
             res = httpd_resp_send_chunk(req, (const char *)_jpg_buf, _jpg_buf_len);
+            
         }
+        
         if(res == ESP_OK){
             res = httpd_resp_send_chunk(req, _STREAM_BOUNDARY, strlen(_STREAM_BOUNDARY));
         }
+        //udp_test_send();
+        int64_t send_end = esp_timer_get_time();
+        ESP_LOGI(TAG, "xxxxxxxxxxxxxxxxxxxxxxxx=%d",(uint32_t)(send_end-send_start));
         if(fb->format != PIXFORMAT_JPEG){
             free(_jpg_buf);
         }
@@ -194,6 +254,7 @@ esp_err_t jpg_stream_httpd_handler(httpd_req_t *req){
         int64_t frame_time = fr_end - last_frame;
         last_frame = fr_end;
         frame_time /= 1000;
+        
         ESP_LOGI(TAG, "MJPG: %uKB %ums (%.1ffps)",
             (uint32_t)(_jpg_buf_len/1024),
             (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);

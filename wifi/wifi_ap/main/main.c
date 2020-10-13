@@ -68,6 +68,8 @@ static esp_err_t http_server_init();
 
 void app_main()
 {
+
+    printf("---------------------------------------------\n");
     esp_log_level_set("wifi", ESP_LOG_INFO);
     
     esp_err_t err = nvs_flash_init();

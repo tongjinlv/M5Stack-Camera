@@ -49,8 +49,6 @@ void dump_cells(const struct quirc_code *code) {
 }
 char tx_buffer1[200]= {0};
 void dump_data(const struct quirc_data *data) {
-	sprintf(tx_buffer1,"%s\n",data->payload);
-    printf("%s",tx_buffer1);
     uart_write_bytes(UART_NUM_1, (char *)tx_buffer1, strlen(tx_buffer1));
     memset(tx_buffer1,0,strlen(tx_buffer1));
 }

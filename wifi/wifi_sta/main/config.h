@@ -21,7 +21,7 @@
 #define CAM_PIN_HREF    26
 #define CAM_PIN_PCLK    21
 
-#define CAM_XCLK_FREQ   10000000
+#define CAM_XCLK_FREQ   20000000
 #define CAMERA_LED_GPIO 14
 
 
