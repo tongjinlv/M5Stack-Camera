@@ -27,7 +27,7 @@
 #include "lwip/timeouts.h"
 
 #include "netif/etharp.h"
-
+#include "rtsp.h"
 #include <signal.h>
 
 //IP_REASSEMBLY=y
@@ -97,8 +97,8 @@ static void udp_test_recv(void *arg,struct udp_pcb *upcb,struct pbuf *p,const ip
 {
     memcpy((void *)&client_addr,(void *)addr,sizeof(ip_addr_t));
     client_port=port;
-    printf("addr->type=%08x\n",addr->u_addr.ip4.addr);
-    printf("Received UDP Packet from ip_addr %s,%d\r\n",  inet_ntoa(addr->u_addr.ip4),port);
+    ESP_LOGI(TAG,"addr->type=%08x",addr->u_addr.ip4.addr);
+    ESP_LOGI(TAG,"Received UDP Packet from ip_addr %s,%d",  inet_ntoa(addr->u_addr.ip4),port);
     LWIP_UNUSED_ARG(arg);
     if (p != NULL) {
             pbuf_free(p);
@@ -111,18 +111,15 @@ static void udp_test_recv(void *arg,struct udp_pcb *upcb,struct pbuf *p,const ip
 }
 void udp_test_send(struct udp_pcb *upcb,const char *buf,int length)
 {
-    struct pbuf *p,pbuf1;
-    const ip_addr_t *addr;
-    addr=&client_addr;
-    p=pbuf_alloc_reference(buf,length, PBUF_ROM);
-    printf("Send UDP Packet to ip_addr %s,%d,%d\r\n",  inet_ntoa(addr->u_addr.ip4),client_port,p->len);
+    struct pbuf *p;
+    p=pbuf_alloc_reference((void *)buf,length, PBUF_ROM);
     err_t code = udp_sendto(upcb, p, &client_addr, client_port); //send it back to port 5555
-    printf("Echo'd packet, result code is %d\r\n",code);
+    ESP_LOGI(TAG,"Echo'd packet, result code is %d\r\n",code);
     pbuf_free(p);
 }
-void udp_server_init(){
+static void udp_server_init(void *pvParameters){
     client_pcb = udp_new();
-    udp_bind(client_pcb, IP_ADDR_ANY, 4444); 
+    udp_bind(client_pcb, IP_ADDR_ANY, 554); 
     udp_recv(client_pcb,udp_test_recv, NULL);
     camera_fb_t * fb = NULL;
     esp_err_t res = ESP_OK;
@@ -134,53 +131,114 @@ void udp_server_init(){
     }
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     while(true){
-        fb = esp_camera_fb_get();
-        if (!fb) {
-            ESP_LOGE(TAG, "Camera capture failed");
-            res = ESP_FAIL;
-        } else {
-            if(fb->format != PIXFORMAT_JPEG){
-                bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
-                if(!jpeg_converted){
-                    ESP_LOGE(TAG, "JPEG compression failed");
-                    esp_camera_fb_return(fb);
-                    res = ESP_FAIL;
-                }
-            } else {
-                _jpg_buf_len = fb->len;
-                _jpg_buf = fb->buf;
-            }
-        }
-        if(client_port)udp_test_send(client_pcb,(const char *)_jpg_buf,_jpg_buf_len);
-        if(fb->format != PIXFORMAT_JPEG){
-            free(_jpg_buf);
-        }
-        esp_camera_fb_return(fb);
-        if(res != ESP_OK){
-            break;
-        }
-        int64_t fr_end = esp_timer_get_time();
-        int64_t frame_time = fr_end - last_frame;
-        last_frame = fr_end;
-        frame_time /= 1000;
-        
-        ESP_LOGI(TAG, "MJPG: %uKB %ums (%.1ffps)",
-            (uint32_t)(_jpg_buf_len/1024),
-            (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
-    }
-
-    last_frame = 0;
-    /*while(true)
-    {
         if(client_port)
         {
-            udp_test_send(client_pcb);
+            fb = esp_camera_fb_get();
+            if (!fb) {
+                ESP_LOGE(TAG, "Camera capture failed");
+                res = ESP_FAIL;
+            } else {
+                if(fb->format != PIXFORMAT_JPEG){
+                    bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
+                    if(!jpeg_converted){
+                        ESP_LOGE(TAG, "JPEG compression failed");
+                        esp_camera_fb_return(fb);
+                        res = ESP_FAIL;
+                    }
+                } else {
+                    _jpg_buf_len = fb->len;
+                    _jpg_buf = fb->buf;
+                }
+            }
+            udp_test_send(client_pcb,(const char *)_jpg_buf,_jpg_buf_len);
+            if(fb->format != PIXFORMAT_JPEG){
+                free(_jpg_buf);
+            }
+            esp_camera_fb_return(fb);
+            if(res != ESP_OK){
+                break;
+            }
+            int64_t fr_end = esp_timer_get_time();
+            int64_t frame_time = fr_end - last_frame;
+            last_frame = fr_end;
+            frame_time /= 1000;
+            ESP_LOGI(TAG, "MJPG: %uKB %ums (%.1ffps)",
+                (uint32_t)(_jpg_buf_len/1024),
+                (uint32_t)frame_time, 1000.0 / (uint32_t)frame_time);
+        }else 
+        {
+            vTaskDelay(100 / portTICK_PERIOD_MS);
         }
-        vTaskDelay(6 / portTICK_PERIOD_MS);
-    }*/
+    }
+    last_frame = 0;
 }
-
-
+static void tcp_client_task(void *pvParameters)
+{
+    int tcpsock=(int)pvParameters;
+    uint8_t rx_buffer[512] = { 0 };
+    uint8_t ret_buffer[1024] = { 0 };
+    ESP_LOGI(TAG, "pvParameters=%d",tcpsock);
+    while(true)
+    {
+        int len = recv(tcpsock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+		if (len > 0) {
+			rx_buffer[len] = 0;
+			printf("Received %d bytes from:%s\n", len, rx_buffer);
+            memset(ret_buffer, 0x00, sizeof(ret_buffer));
+            switch_method((char *)rx_buffer,(char *)ret_buffer);
+            send(tcpsock, ret_buffer,strlen((char *)ret_buffer), 0);
+		} else {
+			close(tcpsock);
+            break;
+		}
+        vTaskDelay(100);
+        ESP_LOGI(TAG, "pvParameters=%d",(int)pvParameters);
+    }
+    ESP_LOGI(TAG, "Client Disconnect");
+    vTaskDelete(NULL);
+}
+void tcp_server_init(){
+    int addr_family;
+    int ip_protocol;
+    addr_family 			 = AF_INET;
+    ip_protocol 			 = IPPROTO_IP;
+    struct sockaddr_in localAddr;
+    localAddr.sin_addr.s_addr 	= htonl(INADDR_ANY);
+    localAddr.sin_family		= AF_INET;
+    localAddr.sin_port			=htons(8080);
+    int listen_sock = socket(addr_family, SOCK_STREAM, ip_protocol);
+    if (listen_sock < 0) 
+    {
+        ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+        return;
+	}
+    int err = bind(listen_sock, (struct sockaddr *)&localAddr, sizeof(localAddr));
+    if (err < 0) 
+    {
+        ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
+    }
+    ESP_LOGI(TAG, "Socket created");
+    err = listen(listen_sock,0);
+    if(err != 0)
+    {
+        ESP_LOGI(TAG,"Socket unable to connect: errno %d", errno);
+    }
+    ESP_LOGI(TAG,"Socket is listening");
+    struct sockaddr_in  sourceAddr;
+    uint addrLen = sizeof(sourceAddr);
+    while(true)
+    {
+        int sock = accept(listen_sock, (struct sockaddr *)&sourceAddr, &addrLen);
+        if (sock < 0) {
+            ESP_LOGE(TAG, "Unable to accept connection: errno %d", errno);
+            return;
+        }
+        ESP_LOGI(TAG, "Welcome %s:%d here!", inet_ntoa(sourceAddr.sin_addr.s_addr), sourceAddr.sin_port);
+        ESP_LOGI(TAG, "Socket accepted sock is %d",sock);
+        portBASE_TYPE res1 = xTaskCreate(tcp_client_task, "taskName",4048, (void *)sock,7, NULL);
+        ESP_LOGI(TAG, "xTaskCreate res is %d",res1);
+    }
+}
 
 
 void app_main()
@@ -216,8 +274,10 @@ void app_main()
     wifi_init_softap();
 
     vTaskDelay(100 / portTICK_PERIOD_MS);
+    //http_server_init();
+    xTaskCreate(udp_server_init, "UDPTask",4048, (void *)0,7, NULL);
+    tcp_server_init();
     http_server_init();
-    udp_server_init();
     
 #endif
 }
