@@ -79,8 +79,8 @@ static camera_config_t camera_config = {
     .ledc_channel = LEDC_CHANNEL_0,
     .pixel_format = PIXFORMAT_JPEG,//YUV422,GRAYSCALE,RGB565,JPEG
     .frame_size = FRAMESIZE_HVGA,//QQVGA-UXGA Do not use sizes above QVGA when not JPEG
-    .jpeg_quality = 4, //0-63 lower number means higher quality
-    .fb_count = 2 //if more than one, i2s runs in continuous mode. Use only with JPEG
+    .jpeg_quality = 20, //0-63 lower number means higher quality
+    .fb_count = 1 //if more than one, i2s runs in continuous mode. Use only with JPEG
 };
 
 static void wifi_init_softap();
@@ -109,6 +109,7 @@ static void udp_test_recv(void *arg,struct udp_pcb *upcb,struct pbuf *p,const ip
 void udp_test_send(struct udp_pcb *upcb,const char *buf,int length)
 {
     struct pbuf *p;
+	if(length>25000)length=25000;
     p=pbuf_alloc_reference((void *)buf,length, PBUF_ROM);
     err_t code = udp_sendto(upcb, p, &client_addr, client_port); //send it back to port 5555
     ESP_LOGI(TAG,"Echo'd packet, result code is %d\r\n",code);
@@ -273,8 +274,8 @@ void app_main()
     vTaskDelay(100 / portTICK_PERIOD_MS);
     //http_server_init();
     xTaskCreate(udp_server_init, "UDPTask",4048, (void *)0,7, NULL);
-    tcp_server_init();
-    http_server_init();
+    //tcp_server_init();
+    //http_server_init();
     
 #endif
 }
